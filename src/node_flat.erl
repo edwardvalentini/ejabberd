@@ -345,15 +345,9 @@ delete_subscriptions(SubKey, Nidx, Subscriptions, SubState) ->
 %%   to completly disable persistance.</li></ul>
 %% </p>
 %% <p>In the default plugin module, the record is unchanged.</p>
-<<<<<<< HEAD
 publish_item(Nidx, Publisher, PublishModel, MaxItems, ItemId, Payload, _PubOpts) ->
     SubKey = jlib:jid_tolower(Publisher),
     GenKey = jlib:jid_remove_resource(SubKey),
-=======
-publish_item(Nidx, Publisher, PublishModel, MaxItems, ItemId, Payload) ->
-    SubKey = jid:tolower(Publisher),
-    GenKey = jid:remove_resource(SubKey),
->>>>>>> master
     GenState = get_state(Nidx, GenKey),
     SubState = case SubKey of
 	GenKey -> GenState;

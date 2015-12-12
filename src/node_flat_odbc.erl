@@ -216,15 +216,9 @@ delete_subscription(SubKey, Nidx, {Subscription, SubId}, Affiliation, Subscripti
 	_ -> update_subscription(Nidx, SubKey, NewSubs)
     end.
 
-<<<<<<< HEAD
 publish_item(Nidx, Publisher, PublishModel, MaxItems, ItemId, Payload, _PubOpts) ->
     SubKey = jlib:jid_tolower(Publisher),
     GenKey = jlib:jid_remove_resource(SubKey),
-=======
-publish_item(Nidx, Publisher, PublishModel, MaxItems, ItemId, Payload) ->
-    SubKey = jid:tolower(Publisher),
-    GenKey = jid:remove_resource(SubKey),
->>>>>>> master
     {Affiliation, Subscriptions} = select_affiliation_subscriptions(Nidx, GenKey, SubKey),
     Subscribed = case PublishModel of
 	subscribers -> node_flat:is_subscribed(Subscriptions);
