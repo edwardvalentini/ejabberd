@@ -17,6 +17,9 @@ BINDIR = $(DESTDIR)@bindir@
 # /sbin/
 SBINDIR = $(DESTDIR)@sbindir@
 
+# /lib/
+LIBDIR =  $(DESTDIR)@libdir@
+
 # /lib/ejabberd/
 EJABBERDDIR = $(DESTDIR)@libdir@/ejabberd
 
@@ -109,9 +112,42 @@ spec:
 	$(ERL) -noinput +B -pa ebin -pa deps/*/ebin -eval \
 	'case xml_gen:compile("tools/xmpp_codec.spec") of ok -> halt(0); _ -> halt(1) end.'
 
-DLLs := $(wildcard deps/*/priv/*.so) $(wildcard deps/*/priv/lib/*.so)
+JOIN_PATHS=$(if $(wordlist 2,1000,$(1)),$(firstword $(1))/$(call JOIN_PATHS,$(wordlist 2,1000,$(1))),$(1))
 
-install: all
+ELIXIR_TO_DEST=$(LIBDIR) $(wordlist 2,2,$(1)) $(wordlist 5,1000,$(1))
+DEPS_TO_DEST=$(LIBDIR) $(wordlist 2,1000,$(1))
+MAIN_TO_DEST=$(LIBDIR) ejabberd $(1)
+TO_DEST_SINGLE=$(if $(subst XdepsX,,X$(word 1,$(1))X),$(call MAIN_TO_DEST,$(1)),$(if $(subst XlibX,,X$(word 3,$(1))X),$(call DEPS_TO_DEST,$(1)),$(call ELIXIR_TO_DEST,$(1))))
+TO_DEST=$(foreach path,$(1),$(call JOIN_PATHS,$(call TO_DEST_SINGLE,$(subst /, ,$(path)))))
+
+FILTER_DIRS=$(foreach path,$(1),$(if $(wildcard $(path)/*),,$(path)))
+FILES_WILDCARD=$(call FILTER_DIRS,$(foreach w,$(1),$(wildcard $(w))))
+
+DEPS_FILES=$(call FILES_WILDCARD,deps/*/ebin/*.beam deps/*/ebin/*.app deps/*/priv/* deps/*/priv/lib/* deps/*/priv/bin/* deps/*/include/*.hrl deps/*/lib/*/ebin/*.beam deps/*/lib/*/ebin/*.app)
+DEPS_FILES_FILTERED=$(filter-out %/epam deps/elixir/ebin/elixir.app,$(DEPS_FILES))
+DEPS_DIRS=$(sort deps/ $(wildcard deps/*) $(dir $(DEPS_FILES)))
+
+MAIN_FILES=$(filter-out %/configure.beam,$(call FILES_WILDCARD,ebin/*.beam ebin/*.app priv/msgs/*.msg priv/lib/* include/*.hrl))
+MAIN_DIRS=$(sort $(dir $(MAIN_FILES)))
+
+define COPY_template
+$(call TO_DEST,$(1)): $(1) $(call TO_DEST,$(dir $(1))) ; $$(INSTALL) -m 644 $(1) $(call TO_DEST,$(1))
+endef
+
+$(foreach file,$(DEPS_FILES_FILTERED) $(MAIN_FILES),$(eval $(call COPY_template,$(file))))
+
+$(sort $(call TO_DEST,$(MAIN_DIRS) $(DEPS_DIRS))):
+	$(INSTALL) -d $@
+
+$(call TO_DEST,deps/p1_pam/priv/bin/epam): $(LIBDIR)/%: deps/% $(call TO_DEST,deps/p1_pam/priv/bin/)
+	$(INSTALL) -m 750 $(O_USER) $< $@
+
+copy-files:
+	$(MAKE) copy-files-sub
+
+copy-files-sub: $(call TO_DEST,$(DEPS_FILES) $(MAIN_FILES))
+
+install: all copy-files
 	#
 	# Configuration files
 	$(INSTALL) -d -m 750 $(G_USER) $(ETCDIR)
@@ -147,40 +183,9 @@ install: all
 		> ejabberd.init
 	chmod 755 ejabberd.init
 	#
-	# Binary Erlang files
-	$(INSTALL) -d $(BEAMDIR)
-	$(INSTALL) -m 644 ebin/*.app $(BEAMDIR)
-	$(INSTALL) -m 644 ebin/*.beam $(BEAMDIR)
-	$(INSTALL) -m 644 deps/*/ebin/*.app $(BEAMDIR)
-	$(INSTALL) -m 644 deps/*/ebin/*.beam $(BEAMDIR)
-	# Install Elixir and Elixir dependancies
-	-$(INSTALL) -m 644 deps/*/lib/*/ebin/*.app $(BEAMDIR)
-	-$(INSTALL) -m 644 deps/*/lib/*/ebin/*.beam $(BEAMDIR)
-	rm -f $(BEAMDIR)/configure.beam
-	#
-	# ejabberd header files
-	$(INSTALL) -d $(INCLUDEDIR)
-	$(INSTALL) -m 644 include/*.hrl $(INCLUDEDIR)
-	$(INSTALL) -m 644 deps/*/include/*.hrl $(INCLUDEDIR)
-	#
 	# Binary C programs
 	$(INSTALL) -d $(PBINDIR)
 	$(INSTALL) -m 750 $(O_USER) tools/captcha.sh $(PBINDIR)
-	$(INSTALL) -m 750 $(O_USER) tools/joincluster $(PBINDIR)
-	$(INSTALL) -m 750 $(O_USER) tools/leavecluster $(PBINDIR)
-	[ -f deps/p1_pam/priv/bin/epam ] \
-		&& $(INSTALL) -m 750 $(O_USER) deps/p1_pam/priv/bin/epam $(PBINDIR) \
-		|| true
-	#
-	# Binary system libraries
-	$(INSTALL) -d $(SODIR)
-	$(INSTALL) -m 644 $(DLLs) $(SODIR)
-	[ -f $(SODIR)/jiffy.so ] && (cd $(PRIVDIR); ln -s lib/jiffy.so; true) || true
-	[ -f $(SODIR)/sqlite3_drv.so ] && (cd $(PRIVDIR); ln -s lib/sqlite3_drv.so; true) || true
-	#
-	# Translated strings
-	$(INSTALL) -d $(MSGSDIR)
-	$(INSTALL) -m 644 priv/msgs/*.msg $(MSGSDIR)
 	#
 	# Copy lite.sql
 	[ -d deps/sqlite3 ] && $(INSTALL) -d $(SQLDIR) || true

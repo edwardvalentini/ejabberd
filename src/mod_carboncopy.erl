@@ -25,6 +25,7 @@
 %%%
 %%%----------------------------------------------------------------------
 -module (mod_carboncopy).
+
 -author ('ecestari@process-one.net').
 -protocol({xep, 280, '0.8'}).
 
@@ -103,7 +104,7 @@ iq_handler1(From, To, IQ) ->
 
 iq_handler(From, _To,  #iq{type=set, sub_el = #xmlel{name = Operation, children = []}} = IQ, CC)->
     ?DEBUG("carbons IQ received: ~p", [IQ]),
-    {U, S, R} = jlib:jid_tolower(From),
+    {U, S, R} = jid:tolower(From),
     Result = case Operation of
         <<"enable">>->
 	    ?INFO_MSG("carbons enabled for user ~s@~s/~s", [U,S,R]),
@@ -112,7 +113,7 @@ iq_handler(From, _To,  #iq{type=set, sub_el = #xmlel{name = Operation, children 
 	    ?INFO_MSG("carbons disabled for user ~s@~s/~s", [U,S,R]),
             disable(S, U, R)
     end,
-    case Result of 
+    case Result of
         ok ->
 	    ?DEBUG("carbons IQ result: ok", []),
             IQ#iq{type=result, sub_el=[]};
@@ -129,9 +130,8 @@ user_send_packet(Packet, _C2SState, From, To) ->
 
 user_receive_packet(Packet, _C2SState, JID, _From, To) ->
     check_and_forward(JID, To, Packet, received).
-    
-% verifier si le trafic est local
-% Modified from original version: 
+
+% Modified from original version:
 %    - registered to the user_send_packet hook, to be called only once even for multicast
 %    - do not support "private" message mode, and do not modify the original packet in any way
 %    - we also replicate "read" notifications
@@ -145,8 +145,8 @@ check_and_forward(JID, To, Packet, Direction)->
 		    send_copies(JID, To, Packet, Direction),
 		    Packet;
 		true ->
-		    %% stop the hook chain, we don't want mod_logdb to register
-		    %% this message (duplicate)
+		    %% stop the hook chain, we don't want logging modules to duplicates
+		    %% this message
 		    {stop, Packet}
 	    end;
         _ ->
@@ -156,12 +156,12 @@ check_and_forward(JID, To, Packet, Direction)->
 remove_connection(User, Server, Resource, _Status)->
     disable(Server, User, Resource),
     ok.
-    
+
 
 %%% Internal
 %% Direction = received | sent <received xmlns='urn:xmpp:carbons:1'/>
 send_copies(JID, To, Packet, Direction)->
-    {U, S, R} = jlib:jid_tolower(JID),
+    {U, S, R} = jid:tolower(JID),
     PrioRes = ejabberd_sm:get_user_present_resources(U, S),
     {_, AvailRs} = lists:unzip(PrioRes),
     {MaxPrio, MaxRes} = case catch lists:max(PrioRes) of
@@ -180,7 +180,7 @@ send_copies(JID, To, Packet, Direction)->
     TargetJIDs = case {IsBareTo, R} of
 	{true, MaxRes} ->
 	    OrigTo = fun(Res) -> lists:member({MaxPrio, Res}, PrioRes) end,
-	    [ {jlib:make_jid({U, S, CCRes}), CC_Version}
+	    [ {jid:make({U, S, CCRes}), CC_Version}
 	     || {CCRes, CC_Version} <- list(U, S),
 		lists:member(CCRes, AvailRs), not OrigTo(CCRes) ];
 	{true, _} ->
@@ -191,16 +191,16 @@ send_copies(JID, To, Packet, Direction)->
 	    %% MaxRes) in order to avoid duplicates.
 	    [];
 	{false, _} ->
-	    [ {jlib:make_jid({U, S, CCRes}), CC_Version}
+	    [ {jid:make({U, S, CCRes}), CC_Version}
 	     || {CCRes, CC_Version} <- list(U, S),
 		lists:member(CCRes, AvailRs), CCRes /= R ]
-	    %TargetJIDs = lists:delete(JID, [ jlib:make_jid({U, S, CCRes}) || CCRes <- list(U, S) ]),
+	    %TargetJIDs = lists:delete(JID, [ jid:make({U, S, CCRes}) || CCRes <- list(U, S) ]),
     end,
 
     lists:map(fun({Dest,Version}) ->
-		    {_, _, Resource} = jlib:jid_tolower(Dest),
+		    {_, _, Resource} = jid:tolower(Dest),
 		    ?DEBUG("Sending:  ~p =/= ~p", [R, Resource]),
-		    Sender = jlib:make_jid({U, S, <<>>}),
+		    Sender = jid:make({U, S, <<>>}),
 		    %{xmlelement, N, A, C} = Packet,
 		    New = build_forward_packet(JID, Packet, Sender, Dest, Direction, Version),
 		    ejabberd_router:route(Sender, Dest, New)
@@ -208,31 +208,31 @@ send_copies(JID, To, Packet, Direction)->
     ok.
 
 build_forward_packet(JID, Packet, Sender, Dest, Direction, ?NS_CARBONS_2) ->
-    #xmlel{name = <<"message">>, 
+    #xmlel{name = <<"message">>,
 	   attrs = [{<<"xmlns">>, <<"jabber:client">>},
 		    {<<"type">>, message_type(Packet)},
-		    {<<"from">>, jlib:jid_to_string(Sender)},
-		    {<<"to">>, jlib:jid_to_string(Dest)}],
-	   children = [	
-		#xmlel{name = list_to_binary(atom_to_list(Direction)), 
+		    {<<"from">>, jid:to_string(Sender)},
+		    {<<"to">>, jid:to_string(Dest)}],
+	   children = [
+		#xmlel{name = list_to_binary(atom_to_list(Direction)),
 		       attrs = [{<<"xmlns">>, ?NS_CARBONS_2}],
 		       children = [
-			#xmlel{name = <<"forwarded">>, 
+			#xmlel{name = <<"forwarded">>,
 			       attrs = [{<<"xmlns">>, ?NS_FORWARD}],
 			       children = [
 				complete_packet(JID, Packet, Direction)]}
 		]}
 	   ]};
 build_forward_packet(JID, Packet, Sender, Dest, Direction, ?NS_CARBONS_1) ->
-    #xmlel{name = <<"message">>, 
+    #xmlel{name = <<"message">>,
 	   attrs = [{<<"xmlns">>, <<"jabber:client">>},
 		    {<<"type">>, message_type(Packet)},
-		    {<<"from">>, jlib:jid_to_string(Sender)},
-		    {<<"to">>, jlib:jid_to_string(Dest)}],
-	   children = [	
-		#xmlel{name = list_to_binary(atom_to_list(Direction)), 
+		    {<<"from">>, jid:to_string(Sender)},
+		    {<<"to">>, jid:to_string(Dest)}],
+	   children = [
+		#xmlel{name = list_to_binary(atom_to_list(Direction)),
 			attrs = [{<<"xmlns">>, ?NS_CARBONS_1}]},
-		#xmlel{name = <<"forwarded">>, 
+		#xmlel{name = <<"forwarded">>,
 		       attrs = [{<<"xmlns">>, ?NS_FORWARD}],
 		       children = [complete_packet(JID, Packet, Direction)]}
 		]}.
@@ -259,7 +259,7 @@ complete_packet(From, #xmlel{name = <<"message">>, attrs = OrigAttrs} = Packet, 
     Attrs = lists:keystore(<<"xmlns">>, 1, OrigAttrs, {<<"xmlns">>, <<"jabber:client">>}),
     case proplists:get_value(<<"from">>, Attrs) of
 	undefined ->
-		Packet#xmlel{attrs = [{<<"from">>, jlib:jid_to_string(From)}|Attrs]};
+		Packet#xmlel{attrs = [{<<"from">>, jid:to_string(From)}|Attrs]};
 	_ ->
 		Packet#xmlel{attrs = Attrs}
     end;
@@ -285,7 +285,7 @@ has_non_empty_body(Packet) ->
     xml:get_subtag_cdata(Packet, <<"body">>) =/= <<"">>.
 
 %% list {resource, cc_version} with carbons enabled for given user and host
-list(User, Server)->
+list(User, Server) ->
 	mnesia:dirty_select(?TABLE, [{#carboncopy{us = {User, Server}, resource = '$2', version = '$3'}, [], [{{'$2','$3'}}]}]).
 
 

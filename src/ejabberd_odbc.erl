@@ -44,8 +44,8 @@
 	 to_bool/1,
 	 sqlite_db/1,
 	 sqlite_file/1,
-         encode_term/1,
-         decode_term/1,
+	 encode_term/1,
+	 decode_term/1,
 	 odbc_config/0,
 	 freetds_config/0,
 	 odbcinst_config/0,
@@ -66,11 +66,11 @@
 
 -record(state,
 	{db_ref = self()                     :: pid(),
-         db_type = odbc                      :: pgsql | mysql | sqlite | odbc | mssql,
-         start_interval = 0                  :: non_neg_integer(),
-         host = <<"">>                       :: binary(),
+	 db_type = odbc                      :: pgsql | mysql | sqlite | odbc | mssql,
+	 start_interval = 0                  :: non_neg_integer(),
+	 host = <<"">>                       :: binary(),
 	 max_pending_requests_len            :: non_neg_integer(),
-         pending_requests = {0, queue:new()} :: {non_neg_integer(), ?TQUEUE}}).
+	 pending_requests = {0, queue:new()} :: {non_neg_integer(), ?TQUEUE}}).
 
 -define(STATE_KEY, ejabberd_odbc_state).
 
@@ -90,7 +90,7 @@
 
 -define(KEEPALIVE_TIMEOUT, 60000).
 
--define(KEEPALIVE_QUERY, <<"SELECT 1;">>).
+-define(KEEPALIVE_QUERY, [<<"SELECT 1;">>]).
 
 %%-define(DBGFSM, true).
 
@@ -153,7 +153,8 @@ sql_call(Host, Msg) ->
         case ejabberd_odbc_sup:get_random_pid(Host) of
           none -> {error, <<"Unknown Host">>};
           Pid ->
-            (?GEN_FSM):sync_send_event(Pid,{sql_cmd, Msg, now()},
+            (?GEN_FSM):sync_send_event(Pid,{sql_cmd, Msg,
+                                            p1_time_compat:monotonic_time(milli_seconds)},
                                        ?TRANSACTION_TIMEOUT)
           end;
       _State -> nested_op(Msg)
@@ -161,7 +162,8 @@ sql_call(Host, Msg) ->
 
 keep_alive(PID) ->
     (?GEN_FSM):sync_send_event(PID,
-			       {sql_cmd, {sql_query, ?KEEPALIVE_QUERY}, now()},
+			       {sql_cmd, {sql_query, ?KEEPALIVE_QUERY},
+                                p1_time_compat:monotonic_time(milli_seconds)},
 			       ?KEEPALIVE_TIMEOUT).
 
 -spec sql_query_t(sql_query()) -> sql_query_result().
@@ -373,7 +375,7 @@ print_state(State) -> State.
 %%%----------------------------------------------------------------------
 
 run_sql_cmd(Command, From, State, Timestamp) ->
-    case timer:now_diff(now(), Timestamp) div 1000 of
+    case p1_time_compat:monotonic_time(milli_seconds) - Timestamp of
       Age when Age < (?TRANSACTION_TIMEOUT) ->
 	  put(?NESTING_KEY, ?TOP_LEVEL_TXN),
 	  put(?STATE_KEY, State),
@@ -477,10 +479,6 @@ sql_query_internal(Query) ->
 	    pgsql ->
 		pgsql_to_odbc(pgsql:squery(State#state.db_ref, Query));
 	    mysql ->
-		?DEBUG("MySQL, Send query~n~p~n", [Query]),  
-		%%squery to be able to specify result_type = binary
-		%%[Query] because p1_mysql_conn expect query to be a list (elements can be binaries, or iolist)
-		%%        but doesn't accept just a binary
 		R = mysql_to_odbc(p1_mysql_conn:squery(State#state.db_ref,
 						   [Query], self(),
 						   [{timeout, (?TRANSACTION_TIMEOUT) - 1000},
@@ -614,14 +612,15 @@ pgsql_item_to_odbc(_) -> {updated, undefined}.
 %% Open a database connection to MySQL
 mysql_connect(Server, Port, DB, Username, Password) ->
     case p1_mysql_conn:start(binary_to_list(Server), Port,
-                          binary_to_list(Username), binary_to_list(Password),
-			  binary_to_list(DB), fun log/3)
+			     binary_to_list(Username),
+			     binary_to_list(Password),
+			     binary_to_list(DB), fun log/3)
 	of
-      {ok, Ref} ->
-	  p1_mysql_conn:fetch(Ref, [<<"set names 'utf8';">>],
-			   self()),
-	  {ok, Ref};
-      Err -> Err
+	{ok, Ref} ->
+	    p1_mysql_conn:fetch(
+		Ref, [<<"set names 'utf8';">>], self()),
+	    {ok, Ref};
+	Err -> Err
     end.
 
 %% Convert MySQL query result to Erlang ODBC result formalism
@@ -706,7 +705,7 @@ db_opts(Host) ->
 		    [odbc, <<"DSN=", Host/binary, ";UID=", Username/binary,
 			     ";PWD=", Pass/binary>>];
 		_ ->
-            [Type, Server, Port, DB, User, Pass]
+		    [Type, Server, Port, DB, User, Pass]
 	    end
     end.
 

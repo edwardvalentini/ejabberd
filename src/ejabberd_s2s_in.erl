@@ -74,21 +74,6 @@
 
 -endif.
 
-%% Module start with or without supervisor:
--ifdef(NO_TRANSIENT_SUPERVISORS).
-
--define(SUPERVISOR_START,
-	p1_fsm:start(ejabberd_s2s_in, [SockData, Opts],
-                     ?FSMOPTS ++ fsm_limit_opts(Opts))).
-
--else.
-
--define(SUPERVISOR_START,
-	supervisor:start_child(ejabberd_s2s_in_sup,
-			       [SockData, Opts])).
-
--endif.
-
 -define(STREAM_HEADER(Version),
 	<<"<?xml version='1.0'?><stream:stream "
 	  "xmlns:stream='http://etherx.jabber.org/stream"
@@ -111,10 +96,9 @@
 -define(INVALID_XML_ERR,
 	xml:element_to_binary(?SERR_XML_NOT_WELL_FORMED)).
 
-%%%----------------------------------------------------------------------
-%%% API
-%%%----------------------------------------------------------------------
-start(SockData, Opts) -> ?SUPERVISOR_START.
+start(SockData, Opts) ->
+    supervisor:start_child(ejabberd_s2s_in_sup,
+                            [SockData, Opts]).
 
 start_link(SockData, Opts) ->
     p1_fsm:start_link(ejabberd_s2s_in, [SockData, Opts],
@@ -126,13 +110,6 @@ socket_type() -> xml_stream.
 %%% Callback functions from gen_fsm
 %%%----------------------------------------------------------------------
 
-%%----------------------------------------------------------------------
-%% Func: init/1
-%% Returns: {ok, StateName, StateData}          |
-%%          {ok, StateName, StateData, Timeout} |
-%%          ignore                              |
-%%          {stop, StopReason}
-%%----------------------------------------------------------------------
 init([{SockMod, Socket}, Opts]) ->
     ?DEBUG("started: ~p", [{SockMod, Socket}]),
     Shaper = case lists:keysearch(shaper, 1, Opts) of
@@ -222,7 +199,7 @@ wait_for_stream({xmlstreamstart, _Name, Attrs},
 	  send_text(StateData,
 		    ?STREAM_HEADER(<<" version='1.0'">>)),
 	  Auth = if StateData#state.tls_enabled ->
-			case jlib:nameprep(xml:get_attr_s(<<"from">>, Attrs)) of
+			case jid:nameprep(xml:get_attr_s(<<"from">>, Attrs)) of
 			  From when From /= <<"">>, From /= error ->
 			      {Result, Message} =
 				  ejabberd_s2s:check_peer_certificate(StateData#state.sockmod,
@@ -383,7 +360,7 @@ wait_for_feature_request({xmlstreamelement, El},
 		       ?INFO_MSG("Accepted s2s EXTERNAL authentication for ~s (TLS=~p)",
 				 [AuthDomain, StateData#state.tls_enabled]),
 		       change_shaper(StateData, <<"">>,
-				     jlib:make_jid(<<"">>, AuthDomain, <<"">>)),
+				     jid:make(<<"">>, AuthDomain, <<"">>)),
 		       {next_state, wait_for_stream,
 			StateData#state{streamid = new_id(),
 					authenticated = true}};
@@ -426,8 +403,8 @@ stream_established({xmlstreamelement, El}, StateData) ->
     case is_key_packet(El) of
       {key, To, From, Id, Key} ->
 	  ?DEBUG("GET KEY: ~p", [{To, From, Id, Key}]),
-	  LTo = jlib:nameprep(To),
-	  LFrom = jlib:nameprep(From),
+	  LTo = jid:nameprep(To),
+	  LFrom = jid:nameprep(From),
 	  case {ejabberd_s2s:allow_host(LTo, LFrom),
 		lists:member(LTo,
 			     ejabberd_router:dirty_get_all_domains())}
@@ -441,7 +418,7 @@ stream_established({xmlstreamelement, El}, StateData) ->
 				      wait_for_verification,
 				      StateData#state.connections),
 		change_shaper(StateData, LTo,
-			      jlib:make_jid(<<"">>, LFrom, <<"">>)),
+			      jid:make(<<"">>, LFrom, <<"">>)),
 		{next_state, stream_established,
 		 StateData#state{connections = Conns, timer = Timer}};
 	    {_, false} ->
@@ -453,8 +430,8 @@ stream_established({xmlstreamelement, El}, StateData) ->
 	  end;
       {verify, To, From, Id, Key} ->
 	  ?DEBUG("VERIFY KEY: ~p", [{To, From, Id, Key}]),
-	  LTo = jlib:nameprep(To),
-	  LFrom = jlib:nameprep(From),
+	  LTo = jid:nameprep(To),
+	  LFrom = jid:nameprep(From),
 	  Type = case ejabberd_s2s:has_key({LTo, LFrom}, Key) of
 		   true -> <<"valid">>;
 		   _ -> <<"invalid">>
@@ -471,9 +448,9 @@ stream_established({xmlstreamelement, El}, StateData) ->
 	  NewEl = jlib:remove_attr(<<"xmlns">>, El),
 	  #xmlel{name = Name, attrs = Attrs} = NewEl,
 	  From_s = xml:get_attr_s(<<"from">>, Attrs),
-	  From = jlib:string_to_jid(From_s),
+	  From = jid:from_string(From_s),
 	  To_s = xml:get_attr_s(<<"to">>, Attrs),
-	  To = jlib:string_to_jid(To_s),
+	  To = jid:from_string(To_s),
 	  if (To /= error) and (From /= error) ->
 		 LFrom = From#jid.lserver,
 		 LTo = To#jid.lserver,
@@ -523,8 +500,8 @@ stream_established({valid, From, To}, StateData) ->
 			children = []}),
     ?INFO_MSG("Accepted s2s dialback authentication for ~s (TLS=~p)",
 	      [From, StateData#state.tls_enabled]),
-    LFrom = jlib:nameprep(From),
-    LTo = jlib:nameprep(To),
+    LFrom = jid:nameprep(From),
+    LTo = jid:nameprep(To),
     NSD = StateData#state{connections =
 			      (?DICT):store({LFrom, LTo}, established,
 					    StateData#state.connections)},
@@ -536,8 +513,8 @@ stream_established({invalid, From, To}, StateData) ->
 			    [{<<"from">>, To}, {<<"to">>, From},
 			     {<<"type">>, <<"invalid">>}],
 			children = []}),
-    LFrom = jlib:nameprep(From),
-    LTo = jlib:nameprep(To),
+    LFrom = jid:nameprep(From),
+    LTo = jid:nameprep(To),
     NSD = StateData#state{connections =
 			      (?DICT):erase({LFrom, LTo},
 					    StateData#state.connections)},
@@ -567,20 +544,8 @@ stream_established(closed, StateData) ->
 %    Reply = ok,
 %    {reply, Reply, state_name, StateData}.
 
-%%----------------------------------------------------------------------
-%% Func: handle_event/3
-%% Returns: {next_state, NextStateName, NextStateData}          |
-%%          {next_state, NextStateName, NextStateData, Timeout} |
-%%          {stop, Reason, NewStateData}
-%%----------------------------------------------------------------------
 handle_event(_Event, StateName, StateData) ->
     {next_state, StateName, StateData}.
-%%----------------------------------------------------------------------
-%% Func: handle_sync_event/4
-%% Returns: The associated StateData for this connection
-%%   {reply, Reply, NextStateName, NextStateData}
-%%   Reply = {state_infos, [{InfoName::atom(), InfoValue::any()]
-%%----------------------------------------------------------------------
 
 handle_sync_event(get_state_infos, _From, StateName,
 		  StateData) ->
@@ -621,12 +586,6 @@ handle_sync_event(_Event, _From, StateName,
 code_change(_OldVsn, StateName, StateData, _Extra) ->
     {ok, StateName, StateData}.
 
-%%----------------------------------------------------------------------
-%% Func: handle_info/3
-%% Returns: {next_state, NextStateName, NextStateData}          |
-%%          {next_state, NextStateName, NextStateData, Timeout} |
-%%          {stop, Reason, NewStateData}
-%%----------------------------------------------------------------------
 handle_info({send_text, Text}, StateName, StateData) ->
     send_text(StateData, Text),
     {next_state, StateName, StateData};
@@ -636,11 +595,6 @@ handle_info({timeout, Timer, _}, _StateName,
 handle_info(_, StateName, StateData) ->
     {next_state, StateName, StateData}.
 
-%%----------------------------------------------------------------------
-%% Func: terminate/3
-%% Purpose: Shutdown the fsm
-%% Returns: any
-%%----------------------------------------------------------------------
 terminate(Reason, _StateName, StateData) ->
     ?DEBUG("terminated: ~p", [Reason]),
     case Reason of
@@ -661,11 +615,6 @@ get_external_hosts(StateData) ->
 	   || {{D, _}, established} <- dict:to_list(Connections)]
     end.
 
-%%----------------------------------------------------------------------
-%% Func: print_state/1
-%% Purpose: Prepare the state to be printed on error log
-%% Returns: State to print
-%%----------------------------------------------------------------------
 print_state(State) -> State.
 
 %%%----------------------------------------------------------------------

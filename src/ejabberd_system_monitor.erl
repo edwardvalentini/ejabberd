@@ -32,7 +32,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0, process_command/3,
+-export([start_link/0, process_command/3, register_hook/1,
 	 process_remote_command/1]).
 
 -export([init/1, handle_call/3, handle_cast/2,
@@ -68,7 +68,7 @@ process_command(From, To, Packet) ->
 	  case Name of
 	    <<"message">> ->
 		LFrom =
-		    jlib:jid_tolower(jlib:jid_remove_resource(From)),
+		    jid:tolower(jid:remove_resource(From)),
 		case lists:member(LFrom, get_admin_jids()) of
 		  true ->
 		      Body = xml:get_path_s(Packet,
@@ -85,6 +85,10 @@ process_command(From, To, Packet) ->
       _ -> ok
     end.
 
+register_hook(Host) ->
+    ejabberd_hooks:add(local_send_to_resource_hook, Host,
+		       ?MODULE, process_command, 50).
+
 %%====================================================================
 %% gen_server callbacks
 %%====================================================================
@@ -100,11 +104,7 @@ init(Opts) ->
     LH = proplists:get_value(large_heap, Opts),
     process_flag(priority, high),
     erlang:system_monitor(self(), [{large_heap, LH}]),
-    lists:foreach(fun (Host) ->
-			  ejabberd_hooks:add(local_send_to_resource_hook, Host,
-					     ?MODULE, process_command, 50)
-		  end,
-		  ?MYHOSTS),
+    lists:foreach(fun register_hook/1, ?MYHOSTS),
     {ok, #state{}}.
 
 %%--------------------------------------------------------------------
@@ -185,9 +185,9 @@ process_large_heap(Pid, Info) ->
              io_lib:format("(~w) The process ~w is consuming too "
                            "much memory:~n~p~n~s",
                            [node(), Pid, Info, DetailedInfo])),
-    From = jlib:make_jid(<<"">>, Host, <<"watchdog">>),
+    From = jid:make(<<"">>, Host, <<"watchdog">>),
     lists:foreach(fun (JID) ->
-                          send_message(From, jlib:make_jid(JID), Body)
+                          send_message(From, jid:make(JID), Body)
                   end, JIDs).
 
 send_message(From, To, Body) ->
@@ -203,8 +203,8 @@ get_admin_jids() ->
     ejabberd_config:get_option(
       watchdog_admins,
       fun(JIDs) ->
-              [jlib:jid_tolower(
-                 jlib:string_to_jid(
+              [jid:tolower(
+                 jid:from_string(
                    iolist_to_binary(S))) || S <- JIDs]
       end, []).
 
@@ -245,8 +245,9 @@ s2s_out_info(Pid) ->
     [<<"Process type: s2s_out">>,
      case FromTo of
        [{From, To}] ->
-	     list_to_binary(io_lib:format("\nS2S connection: from ~s to ~s",
-			    [From, To]));
+	   <<"\n",
+	     (io_lib:format("S2S connection: from ~s to ~s",
+			    [From, To]))/binary>>;
        _ -> <<"">>
      end,
      check_send_queue(Pid), <<"\n">>,
@@ -310,7 +311,7 @@ help() ->
       "<node>\n  setlh <node> <integer>">>.
 
 remote_command(Node, Args, From, To) ->
-    Message = case rpc:call(Node, ?MODULE,
+    Message = case ejabberd_cluster:call(Node, ?MODULE,
 			    process_remote_command, [Args])
 		  of
 		{badrpc, Reason} ->
@@ -335,7 +336,7 @@ process_remote_command(_) -> throw(unknown_command).
 
 opt_type(watchdog_admins) ->
     fun (JIDs) ->
-	    [jlib:jid_tolower(jlib:string_to_jid(iolist_to_binary(S)))
+	    [jid:tolower(jid:from_string(iolist_to_binary(S)))
 	     || S <- JIDs]
     end;
 opt_type(watchdog_large_heap) ->

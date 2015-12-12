@@ -27,6 +27,7 @@
 %% API
 -export([init/0, subscribe_node/3, unsubscribe_node/3,
     get_subscription/3, set_subscription/4,
+    make_subid/0,
     get_options_xform/2, parse_options_xform/1]).
 
 % Internal function also exported for use in transactional bloc from pubsub plugins
@@ -202,7 +203,7 @@ write_subscription(_JID, _NodeId, SubID, Options) ->
 
 -spec(make_subid/0 :: () -> SubId::mod_pubsub:subId()).
 make_subid() ->
-    {T1, T2, T3} = now(),
+    {T1, T2, T3} = p1_time_compat:timestamp(),
     iolist_to_binary(io_lib:fwrite("~.16B~.16B~.16B", [T1, T2, T3])).
 
 %%

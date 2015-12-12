@@ -15,6 +15,7 @@ ERL={{erl}}
 IEX={{bindir}}/iex
 EPMD={{bindir}}/epmd
 INSTALLUSER={{installuser}}
+ERL_LIBS={{libdir}}
 
 # check the proper system user is used if defined
 if [ "$INSTALLUSER" != "" ] ; then
@@ -47,6 +48,7 @@ while [ $# -ne 0 ] ; do
     shift
     case $PARAM in
         --) break ;;
+        --no-timeout) EJABBERD_NO_TIMEOUT="--no-timeout" ;;
         --node) ERLANG_NODE_ARG=$1 ; shift ;;
         --config-dir) ETC_DIR="$1" ; shift ;;
         --config) EJABBERD_CONFIG_PATH="$1" ; shift ;;
@@ -87,24 +89,14 @@ if [ "{{release}}" != "true" ] ; then
     if [ "$EJABBERDDIR" = "" ] ; then
         EJABBERDDIR={{libdir}}/ejabberd
     fi
-    if [ "$EJABBERD_EBIN_PATH" = "" ] ; then
-        EJABBERD_EBIN_PATH=$EJABBERDDIR/ebin
-    fi
     if [ "$EJABBERD_PRIV_PATH" = "" ] ; then
         EJABBERD_PRIV_PATH=$EJABBERDDIR/priv
     fi
     if [ "$EJABBERD_BIN_PATH" = "" ] ; then
         EJABBERD_BIN_PATH=$EJABBERD_PRIV_PATH/bin
     fi
-    if [ "$EJABBERD_SO_PATH" = "" ] ; then
-        EJABBERD_SO_PATH=$EJABBERD_PRIV_PATH/lib
-    fi
-    if [ "$EJABBERD_MSGS_PATH" = "" ] ; then
-        EJABBERD_MSGS_PATH=$EJABBERD_PRIV_PATH/msgs
-    fi
 fi
 EJABBERD_LOG_PATH=$LOGS_DIR/ejabberd.log
-SASL_LOG_PATH=$LOGS_DIR/erlang.log
 DATETIME=`date "+%Y%m%d-%H%M%S"`
 ERL_CRASH_DUMP=$LOGS_DIR/erl_crash_$DATETIME.dump
 ERL_INETRC=$ETC_DIR/inetrc
@@ -155,9 +147,7 @@ cd $SPOOL_DIR
 
 # export global variables
 export EJABBERD_CONFIG_PATH
-export EJABBERD_MSGS_PATH
 export EJABBERD_LOG_PATH
-export EJABBERD_SO_PATH
 export EJABBERD_BIN_PATH
 export EJABBERD_DOC_PATH
 export EJABBERD_PID_PATH
@@ -167,6 +157,8 @@ export ERL_INETRC
 export ERL_MAX_PORTS
 export ERL_MAX_ETS_TABLES
 export CONTRIB_MODULES_PATH
+export CONTRIB_MODULES_CONF_DIR
+export ERL_LIBS
 
 # start server
 start()
@@ -180,7 +172,6 @@ start()
       $KERNEL_OPTS \
       $EJABBERD_OPTS \
       -s ejabberd \
-      -sasl sasl_error_logger \\{file,\\\"$SASL_LOG_PATH\\\"\\} \
       $ERLANG_OPTS $ARGS \"$@\""
 }
 
@@ -236,6 +227,21 @@ iexlive()
       --erl \"$EJABBERD_OPTS\" \
       --app ejabberd \
       --erl \"$ERLANG_OPTS\" --erl $ARGS --erl \"$@\""
+}
+
+# start server in the foreground
+foreground()
+{
+    check_start
+    $EXEC_CMD "$ERL \
+      $NAME $ERLANG_NODE \
+      -noinput \
+      -pa $EJABBERD_EBIN_PATH \
+      $MNESIA_OPTS \
+      $KERNEL_OPTS \
+      $EJABBERD_OPTS \
+      -s ejabberd \
+      $ERLANG_OPTS $ARGS \"$@\""
 }
 
 debugwarning()
@@ -310,11 +316,12 @@ help()
 {
     echo ""
     echo "Commands to start an ejabberd node:"
-    echo "  start    Start an ejabberd node in server mode"
-    echo "  debug    Attach an interactive Erlang shell to a running ejabberd node"
-    echo "  iexdebug Attach an interactive Elixir shell to a running ejabberd node"
-    echo "  live     Start an ejabberd node in live (interactive) mode"
-    echo "  iexlive  Start an ejabberd node in live (interactive) mode, within an Elixir shell"
+    echo "  start      Start an ejabberd node in server mode"
+    echo "  debug      Attach an interactive Erlang shell to a running ejabberd node"
+    echo "  iexdebug   Attach an interactive Elixir shell to a running ejabberd node"
+    echo "  live       Start an ejabberd node in live (interactive) mode"
+    echo "  iexlive    Start an ejabberd node in live (interactive) mode, within an Elixir shell"
+    echo "  foreground Start an ejabberd node in server mode (attached)"
     echo ""
     echo "Optional parameters when starting an ejabberd node:"
     echo "  --config-dir dir   Config ejabberd:    $ETC_DIR"
@@ -412,7 +419,7 @@ ctlexec()
       -hidden \
       -pa $EJABBERD_EBIN_PATH \
       $KERNEL_OPTS \
-      -s ejabberd_ctl -extra $ERLANG_NODE $COMMAND"
+      -s ejabberd_ctl -extra $ERLANG_NODE $EJABBERD_NO_TIMEOUT $COMMAND"
 }
 
 # stop epmd if there is no other running node
@@ -439,16 +446,6 @@ check_start()
             }
         }
     }
-}
-
-# cluster setup
-join_cluster()
-{
-    $EXEC_CMD "$EJABBERD_BIN_PATH/joincluster $*"
-}
-leave_cluster()
-{
-    $EXEC_CMD "$EJABBERD_BIN_PATH/leavecluster $*"
 }
 
 # allow sync calls
@@ -478,11 +475,10 @@ case $ARGS in
     ' iexdebug') iexdebug;;
     ' live') live;;
     ' iexlive') iexlive;;
+    ' foreground') foreground;;
     ' ping'*) ping ${ARGS# ping};;
     ' etop') etop;;
     ' started') wait_for_status 0 30 2;; # wait 30x2s before timeout
     ' stopped') wait_for_status 3 15 2 && stop_epmd;; # wait 15x2s before timeout
-    ' join_cluster'*) join_cluster ${ARGS# join_cluster};;
-    ' leave_cluster'*) leave_cluster ${ARGS# leave_cluster};;
     *) ctl $ARGS;;
 esac

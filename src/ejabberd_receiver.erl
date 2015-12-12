@@ -58,13 +58,6 @@
 
 -define(HIBERNATE_TIMEOUT, 90000).
 
-%%====================================================================
-%% API
-%%====================================================================
-%%--------------------------------------------------------------------
-%% Function: start_link() -> {ok,Pid} | ignore | {error,Error}
-%% Description: Starts the server
-%%--------------------------------------------------------------------
 -spec start_link(inet:socket(), atom(), shaper:shaper(),
                  non_neg_integer() | infinity) -> ignore |
                                                   {error, any()} |
@@ -76,10 +69,6 @@ start_link(Socket, SockMod, Shaper, MaxStanzaSize) ->
 
 -spec start(inet:socket(), atom(), shaper:shaper()) -> undefined | pid().
 
-%%--------------------------------------------------------------------
-%% Function: start() -> {ok,Pid} | ignore | {error,Error}
-%% Description: Starts the server
-%%--------------------------------------------------------------------
 start(Socket, SockMod, Shaper) ->
     start(Socket, SockMod, Shaper, infinity).
 
@@ -87,9 +76,8 @@ start(Socket, SockMod, Shaper) ->
             non_neg_integer() | infinity) -> undefined | pid().
 
 start(Socket, SockMod, Shaper, MaxStanzaSize) ->
-    {ok, Pid} =
-	supervisor:start_child(ejabberd_receiver_sup,
-			       [Socket, SockMod, Shaper, MaxStanzaSize]),
+    {ok, Pid} = gen_server:start(ejabberd_receiver,
+				 [Socket, SockMod, Shaper, MaxStanzaSize], []),
     Pid.
 
 -spec change_shaper(pid(), shaper:shaper()) -> ok.
@@ -127,13 +115,6 @@ close(Pid) ->
 %% gen_server callbacks
 %%====================================================================
 
-%%--------------------------------------------------------------------
-%% Function: init(Args) -> {ok, State} |
-%%                         {ok, State, Timeout} |
-%%                         ignore               |
-%%                         {stop, Reason}
-%% Description: Initiates the server
-%%--------------------------------------------------------------------
 init([Socket, SockMod, Shaper, MaxStanzaSize]) ->
     ShaperState = shaper:new(Shaper),
     Timeout = case SockMod of
@@ -145,69 +126,39 @@ init([Socket, SockMod, Shaper, MaxStanzaSize]) ->
 	    shaper_state = ShaperState,
 	    max_stanza_size = MaxStanzaSize, timeout = Timeout}}.
 
-%%--------------------------------------------------------------------
-%% Function: %% handle_call(Request, From, State) -> {reply, Reply, State} |
-%%                                      {reply, Reply, State, Timeout} |
-%%                                      {noreply, State} |
-%%                                      {noreply, State, Timeout} |
-%%                                      {stop, Reason, Reply, State} |
-%%                                      {stop, Reason, State}
-%% Description: Handling call messages
-%%--------------------------------------------------------------------
-handle_call({starttls, TLSSocket}, _From,
-	    #state{xml_stream_state = XMLStreamState,
-		   c2s_pid = C2SPid,
-		   max_stanza_size = MaxStanzaSize} = State) ->
-    close_stream(XMLStreamState),
-    NewXMLStreamState = case C2SPid of
-                            undefined ->
-                                XMLStreamState;
-                            _ ->
-                                xml_stream:new(C2SPid,
-                                               MaxStanzaSize)
-                        end,
-    NewState = State#state{socket = TLSSocket,
-			   sock_mod = p1_tls,
-			   xml_stream_state = NewXMLStreamState},
+handle_call({starttls, TLSSocket}, _From, State) ->
+    State1 = reset_parser(State),
+    NewState = State1#state{socket = TLSSocket,
+                            sock_mod = p1_tls},
     case p1_tls:recv_data(TLSSocket, <<"">>) of
 	{ok, TLSData} ->
-	    {reply, ok, process_data(TLSData, NewState), ?HIBERNATE_TIMEOUT};
+	    {reply, ok,
+		process_data(TLSData, NewState), ?HIBERNATE_TIMEOUT};
 	{error, _Reason} ->
 	    {stop, normal, ok, NewState}
     end;
 handle_call({compress, Data}, _From,
-	    #state{xml_stream_state = XMLStreamState,
-		   c2s_pid = C2SPid, socket = Socket, sock_mod = SockMod,
-		   max_stanza_size = MaxStanzaSize} =
+	    #state{socket = Socket, sock_mod = SockMod} =
 		State) ->
     {ok, ZlibSocket} = ezlib:enable_zlib(SockMod,
 						 Socket),
     if Data /= undefined -> do_send(State, Data);
        true -> ok
     end,
-    close_stream(XMLStreamState),
-    NewXMLStreamState = xml_stream:new(C2SPid,
-				       MaxStanzaSize),
-    NewState = State#state{socket = ZlibSocket,
-			   sock_mod = ezlib,
-			   xml_stream_state = NewXMLStreamState},
+    State1 = reset_parser(State),
+    NewState = State1#state{socket = ZlibSocket,
+			   sock_mod = ezlib},
     case ezlib:recv_data(ZlibSocket, <<"">>) of
       {ok, ZlibData} ->
-	  {reply, {ok, ZlibSocket},
-	   process_data(ZlibData, NewState), ?HIBERNATE_TIMEOUT};
-      {error, _Reason} -> {stop, normal, ok, NewState}
+	    {reply, {ok, ZlibSocket},
+		process_data(ZlibData, NewState), ?HIBERNATE_TIMEOUT};
+      {error, _Reason} ->
+	    {stop, normal, ok, NewState}
     end;
-handle_call(reset_stream, _From,
-	    #state{xml_stream_state = XMLStreamState,
-		   c2s_pid = C2SPid, max_stanza_size = MaxStanzaSize} =
-		State) ->
-    close_stream(XMLStreamState),
-    NewXMLStreamState = xml_stream:new(C2SPid,
-				       MaxStanzaSize),
+handle_call(reset_stream, _From, State) ->
+    NewState = reset_parser(State),
     Reply = ok,
-    {reply, Reply,
-     State#state{xml_stream_state = NewXMLStreamState},
-     ?HIBERNATE_TIMEOUT};
+    {reply, Reply, NewState, ?HIBERNATE_TIMEOUT};
 handle_call({become_controller, C2SPid}, _From, State) ->
     XMLStreamState = xml_stream:new(C2SPid, State#state.max_stanza_size),
     NewState = State#state{c2s_pid = C2SPid,
@@ -218,12 +169,6 @@ handle_call({become_controller, C2SPid}, _From, State) ->
 handle_call(_Request, _From, State) ->
     Reply = ok, {reply, Reply, State, ?HIBERNATE_TIMEOUT}.
 
-%%--------------------------------------------------------------------
-%% Function: handle_cast(Msg, State) -> {noreply, State} |
-%%                                      {noreply, State, Timeout} |
-%%                                      {stop, Reason, State}
-%% Description: Handling cast messages
-%%--------------------------------------------------------------------
 handle_cast({change_shaper, Shaper}, State) ->
     NewShaperState = shaper:new(Shaper),
     {noreply, State#state{shaper_state = NewShaperState},
@@ -232,12 +177,6 @@ handle_cast(close, State) -> {stop, normal, State};
 handle_cast(_Msg, State) ->
     {noreply, State, ?HIBERNATE_TIMEOUT}.
 
-%%--------------------------------------------------------------------
-%% Function: handle_info(Info, State) -> {noreply, State} |
-%%                                       {noreply, State, Timeout} |
-%%                                       {stop, Reason, State}
-%% Description: Handling all non call/cast messages
-%%--------------------------------------------------------------------
 handle_info({Tag, _TCPSocket, Data},
 	    #state{socket = Socket, sock_mod = SockMod} = State)
     when (Tag == tcp) or (Tag == ssl) or
@@ -285,13 +224,6 @@ handle_info(timeout, State) ->
 handle_info(_Info, State) ->
     {noreply, State, ?HIBERNATE_TIMEOUT}.
 
-%%--------------------------------------------------------------------
-%% Function: terminate(Reason, State) -> void()
-%% Description: This function is called by a gen_server when it is about to
-%% terminate. It should be the opposite of Module:init/1 and do any necessary
-%% cleaning up. When it returns, the gen_server terminates with Reason.
-%% The return value is ignored.
-%%--------------------------------------------------------------------
 terminate(_Reason,
 	  #state{xml_stream_state = XMLStreamState,
 		 c2s_pid = C2SPid} =
@@ -304,10 +236,6 @@ terminate(_Reason,
     catch (State#state.sock_mod):close(State#state.socket),
     ok.
 
-%%--------------------------------------------------------------------
-%% Func: code_change(OldVsn, State, Extra) -> {ok, NewState}
-%% Description: Convert process state when code is changed
-%%--------------------------------------------------------------------
 code_change(_OldVsn, State, _Extra) -> {ok, State}.
 
 %%--------------------------------------------------------------------
@@ -382,6 +310,24 @@ element_wrapper(Element) -> Element.
 close_stream(undefined) -> ok;
 close_stream(XMLStreamState) ->
     xml_stream:close(XMLStreamState).
+
+reset_parser(#state{xml_stream_state = undefined} = State) ->
+    State;
+reset_parser(#state{c2s_pid = C2SPid,
+                    max_stanza_size = MaxStanzaSize,
+                    xml_stream_state = XMLStreamState}
+             = State) ->
+    NewStreamState = try xml_stream:reset(XMLStreamState)
+                     catch error:_ ->
+                             close_stream(XMLStreamState),
+                             case C2SPid of
+                                 undefined ->
+                                     undefined;
+                                 _ ->
+                                     xml_stream:new(C2SPid, MaxStanzaSize)
+                             end
+                     end,
+    State#state{xml_stream_state = NewStreamState}.
 
 do_send(State, Data) ->
     (State#state.sock_mod):send(State#state.socket, Data).

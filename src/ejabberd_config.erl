@@ -69,8 +69,7 @@ start() ->
     State0 = read_file(Config),
     State = validate_opts(State0),
     %% This start time is used by mod_last:
-    {MegaSecs, Secs, _} = now(),
-    UnixTime = MegaSecs*1000000 + Secs,
+    UnixTime = p1_time_compat:system_time(seconds),
     SharedKey = case erlang:get_cookie() of
                     nocookie ->
                         p1_sha:sha(randoms:get_string());
@@ -192,7 +191,6 @@ env_binary_to_list(Application, Parameter) ->
 %% Returns a list of plain terms,
 %% in which the options 'include_config_file' were parsed
 %% and the terms in those files were included.
-%% @spec(string()) -> [term()]
 %% @spec(iolist()) -> [term()]
 get_plain_terms_file(File) ->
     get_plain_terms_file(File, [{include_files, true}]).
@@ -307,7 +305,7 @@ normalize_hosts(Hosts) ->
 normalize_hosts([], PrepHosts) ->
     lists:reverse(PrepHosts);
 normalize_hosts([Host|Hosts], PrepHosts) ->
-    case jlib:nodeprep(iolist_to_binary(Host)) of
+    case jid:nodeprep(iolist_to_binary(Host)) of
 	error ->
 	    ?ERROR_MSG("Can't load config file: "
 		       "invalid host name [~p]", [Host]),
@@ -373,18 +371,27 @@ exit_or_halt(ExitText) ->
 
 get_config_option_key(Name, Val) ->
     if Name == listen ->
-            lists:foldl(
-              fun({port, Port}, {_, IP, T, Mod}) ->
-                      {Port, IP, T, Mod};
-                 ({ip, IP}, {Port, _, T, Mod}) ->
-                      {Port, IP, T, Mod};
-                 ({transport, T}, {Port, IP, _, Mod}) ->
-                      {Port, IP, T, Mod};
-                 ({module, Mod}, {Port, IP, T, _}) ->
-                      {Port, IP, T, Mod};
-                 (_, Res) ->
-                      Res
-              end, {5222, {0,0,0,0}, tcp, ejabberd_c2s}, Val);
+            case Val of
+                {{Port, IP, Trans}, _Mod, _Opts} ->
+                    {Port, IP, Trans};
+                {{Port, Trans}, _Mod, _Opts} when Trans == tcp; Trans == udp ->
+                    {Port, {0,0,0,0}, Trans};
+                {{Port, IP}, _Mod, _Opts} ->
+                    {Port, IP, tcp};
+                {Port, _Mod, _Opts} ->
+                    {Port, {0,0,0,0}, tcp};
+                V when is_list(V) ->
+                    lists:foldl(
+                      fun({port, Port}, {_, IP, T}) ->
+                              {Port, IP, T};
+                         ({ip, IP}, {Port, _, T}) ->
+                              {Port, IP, T};
+                         ({transport, T}, {Port, IP, _}) ->
+                              {Port, IP, T};
+                         (_, Res) ->
+                              Res
+                      end, {5222, {0,0,0,0}, tcp}, Val)
+            end;
        is_tuple(Val) ->
             element(1, Val);
        true ->
@@ -399,7 +406,6 @@ maps_to_lists(IMap) ->
                  (Name, Val, Res) ->
                       [{Name, Val} | Res]
               end, [], IMap).
-
 
 merge_configs(Terms, ResMap) ->
     lists:foldl(fun({Name, Val}, Map) when is_list(Val) ->
@@ -844,6 +850,7 @@ replace_module(mod_roster_odbc) -> {mod_roster, odbc};
 replace_module(mod_shared_roster_odbc) -> {mod_shared_roster, odbc};
 replace_module(mod_vcard_odbc) -> {mod_vcard, odbc};
 replace_module(mod_vcard_xupdate_odbc) -> {mod_vcard_xupdate, odbc};
+replace_module(mod_pubsub_odbc) -> {mod_pubsub, odbc};
 replace_module(Module) ->
     case is_elixir_module(Module) of
         true  -> expand_elixir_module(Module);

@@ -51,7 +51,7 @@
     path_to_node/1, can_fetch_item/2, is_subscribed/1]).
 
 init(_Host, _ServerHost, _Opts) ->
-    pubsub_subscription:init(),
+    %%pubsub_subscription:init(),
     mnesia:create_table(pubsub_state,
 	[{disc_copies, [node()]},
 	    {type, ordered_set},
@@ -97,7 +97,6 @@ features() ->
 	<<"instant-nodes">>,
 	<<"manage-subscriptions">>,
 	<<"modify-affiliations">>,
-	<<"multi-subscribe">>,
 	<<"outcast-affiliation">>,
 	<<"persistent-items">>,
 	<<"publish">>,
@@ -108,15 +107,15 @@ features() ->
 	<<"retrieve-items">>,
 	<<"retrieve-subscriptions">>,
 	<<"subscribe">>,
-	<<"subscription-notifications">>,
-	<<"subscription-options">>].
+	<<"subscription-notifications">>].
+%%<<"subscription-options">>
 
 %% @doc Checks if the current user has the permission to create the requested node
 %% <p>In flat node, any unused node name is allowed. The access parameter is also
 %% checked. This parameter depends on the value of the
 %% <tt>access_createnode</tt> ACL value in ejabberd config file.</p>
 create_node_permission(Host, ServerHost, _Node, _ParentNode, Owner, Access) ->
-    LOwner = jlib:jid_tolower(Owner),
+    LOwner = jid:tolower(Owner),
     Allowed = case LOwner of
 	{<<"">>, Host, <<"">>} ->
 	    true; % pubsub service always allowed
@@ -126,7 +125,7 @@ create_node_permission(Host, ServerHost, _Node, _ParentNode, Owner, Access) ->
     {result, Allowed}.
 
 create_node(Nidx, Owner) ->
-    OwnerKey = jlib:jid_tolower(jlib:jid_remove_resource(Owner)),
+    OwnerKey = jid:tolower(jid:remove_resource(Owner)),
     set_state(#pubsub_state{stateid = {OwnerKey, Nidx},
 	    affiliation = owner}),
     {result, {default, broadcast}}.
@@ -177,10 +176,10 @@ delete_node(Nodes) ->
 %% </p>
 %% <p>In the default plugin module, the record is unchanged.</p>
 subscribe_node(Nidx, Sender, Subscriber, AccessModel,
-	    SendLast, PresenceSubscription, RosterGroup, Options) ->
-    SubKey = jlib:jid_tolower(Subscriber),
-    GenKey = jlib:jid_remove_resource(SubKey),
-    Authorized = jlib:jid_tolower(jlib:jid_remove_resource(Sender)) == GenKey,
+	    SendLast, PresenceSubscription, RosterGroup, _Options) ->
+    SubKey = jid:tolower(Subscriber),
+    GenKey = jid:remove_resource(SubKey),
+    Authorized = jid:tolower(jid:remove_resource(Sender)) == GenKey,
     GenState = get_state(Nidx, GenKey),
     SubState = case SubKey of
 	GenKey -> GenState;
@@ -219,13 +218,20 @@ subscribe_node(Nidx, Sender, Subscriber, AccessModel,
 	%%        % Requesting entity is anonymous
 	%%        {error, ?ERR_FORBIDDEN};
 	true ->
-	    SubId = pubsub_subscription:add_subscription(Subscriber, Nidx, Options),
-	    NewSub = case AccessModel of
-		authorize -> pending;
-		_ -> subscribed
+	    %%SubId = pubsub_subscription:add_subscription(Subscriber, Nidx, Options),
+	    {NewSub, SubId} = case Subscriptions of
+		[{subscribed, Id}|_] ->
+		    {subscribed, Id};
+		[] ->
+		    Id = pubsub_subscription:make_subid(),
+		    Sub = case AccessModel of
+			authorize -> pending;
+			_ -> subscribed
+		    end,
+		    set_state(SubState#pubsub_state{subscriptions =
+			    [{Sub, Id} | Subscriptions]}),
+		    {Sub, Id}
 	    end,
-	    set_state(SubState#pubsub_state{subscriptions =
-		    [{NewSub, SubId} | Subscriptions]}),
 	    case {NewSub, SendLast} of
 		{subscribed, never} ->
 		    {result, {default, subscribed, SubId}};
@@ -238,9 +244,9 @@ subscribe_node(Nidx, Sender, Subscriber, AccessModel,
 
 %% @doc <p>Unsubscribe the <tt>Subscriber</tt> from the <tt>Node</tt>.</p>
 unsubscribe_node(Nidx, Sender, Subscriber, SubId) ->
-    SubKey = jlib:jid_tolower(Subscriber),
-    GenKey = jlib:jid_remove_resource(SubKey),
-    Authorized = jlib:jid_tolower(jlib:jid_remove_resource(Sender)) == GenKey,
+    SubKey = jid:tolower(Subscriber),
+    GenKey = jid:remove_resource(SubKey),
+    Authorized = jid:tolower(jid:remove_resource(Sender)) == GenKey,
     GenState = get_state(Nidx, GenKey),
     SubState = case SubKey of
 	GenKey -> GenState;
@@ -301,7 +307,7 @@ unsubscribe_node(Nidx, Sender, Subscriber, SubId) ->
 
 delete_subscriptions(SubKey, Nidx, Subscriptions, SubState) ->
     NewSubs = lists:foldl(fun ({Subscription, SubId}, Acc) ->
-		    pubsub_subscription:delete_subscription(SubKey, Nidx, SubId),
+		    %%pubsub_subscription:delete_subscription(SubKey, Nidx, SubId),
 		    Acc -- [{Subscription, SubId}]
 	    end, SubState#pubsub_state.subscriptions, Subscriptions),
     case {SubState#pubsub_state.affiliation, NewSubs} of
@@ -339,9 +345,15 @@ delete_subscriptions(SubKey, Nidx, Subscriptions, SubState) ->
 %%   to completly disable persistance.</li></ul>
 %% </p>
 %% <p>In the default plugin module, the record is unchanged.</p>
+<<<<<<< HEAD
 publish_item(Nidx, Publisher, PublishModel, MaxItems, ItemId, Payload, _PubOpts) ->
     SubKey = jlib:jid_tolower(Publisher),
     GenKey = jlib:jid_remove_resource(SubKey),
+=======
+publish_item(Nidx, Publisher, PublishModel, MaxItems, ItemId, Payload) ->
+    SubKey = jid:tolower(Publisher),
+    GenKey = jid:remove_resource(SubKey),
+>>>>>>> master
     GenState = get_state(Nidx, GenKey),
     SubState = case SubKey of
 	GenKey -> GenState;
@@ -362,7 +374,7 @@ publish_item(Nidx, Publisher, PublishModel, MaxItems, ItemId, Payload, _PubOpts)
 	    {error, ?ERR_FORBIDDEN};
 	true ->
 	    if MaxItems > 0 ->
-		    Now = now(),
+		    Now = p1_time_compat:timestamp(),
 		    PubId = {Now, SubKey},
 		    Item = case get_item(Nidx, ItemId) of
 			{result, OldItem} ->
@@ -406,8 +418,8 @@ remove_extra_items(Nidx, MaxItems, ItemIds) ->
 %% <p>Default plugin: The user performing the deletion must be the node owner
 %% or a publisher, or PublishModel being open.</p>
 delete_item(Nidx, Publisher, PublishModel, ItemId) ->
-    SubKey = jlib:jid_tolower(Publisher),
-    GenKey = jlib:jid_remove_resource(SubKey),
+    SubKey = jid:tolower(Publisher),
+    GenKey = jid:remove_resource(SubKey),
     GenState = get_state(Nidx, GenKey),
     #pubsub_state{affiliation = Affiliation, items = Items} = GenState,
     Allowed = Affiliation == publisher orelse
@@ -451,8 +463,8 @@ delete_item(Nidx, Publisher, PublishModel, ItemId) ->
     end.
 
 purge_node(Nidx, Owner) ->
-    SubKey = jlib:jid_tolower(Owner),
-    GenKey = jlib:jid_remove_resource(SubKey),
+    SubKey = jid:tolower(Owner),
+    GenKey = jid:remove_resource(SubKey),
     GenState = get_state(Nidx, GenKey),
     case GenState of
 	#pubsub_state{affiliation = owner} ->
@@ -478,8 +490,8 @@ purge_node(Nidx, Owner) ->
 %% that will be added to the affiliation stored in the main
 %% <tt>pubsub_state</tt> table.</p>
 get_entity_affiliations(Host, Owner) ->
-    SubKey = jlib:jid_tolower(Owner),
-    GenKey = jlib:jid_remove_resource(SubKey),
+    SubKey = jid:tolower(Owner),
+    GenKey = jid:remove_resource(SubKey),
     States = mnesia:match_object(#pubsub_state{stateid = {GenKey, '_'}, _ = '_'}),
     NodeTree = mod_pubsub:tree(Host),
     Reply = lists:foldl(fun (#pubsub_state{stateid = {_, N}, affiliation = A}, Acc) ->
@@ -497,14 +509,14 @@ get_node_affiliations(Nidx) ->
     {result, lists:map(Tr, States)}.
 
 get_affiliation(Nidx, Owner) ->
-    SubKey = jlib:jid_tolower(Owner),
-    GenKey = jlib:jid_remove_resource(SubKey),
+    SubKey = jid:tolower(Owner),
+    GenKey = jid:remove_resource(SubKey),
     #pubsub_state{affiliation = Affiliation} = get_state(Nidx, GenKey),
     {result, Affiliation}.
 
 set_affiliation(Nidx, Owner, Affiliation) ->
-    SubKey = jlib:jid_tolower(Owner),
-    GenKey = jlib:jid_remove_resource(SubKey),
+    SubKey = jid:tolower(Owner),
+    GenKey = jid:remove_resource(SubKey),
     GenState = get_state(Nidx, GenKey),
     case {Affiliation, GenState#pubsub_state.subscriptions} of
 	{none, []} -> del_state(Nidx, GenKey);
@@ -519,8 +531,8 @@ set_affiliation(Nidx, Owner, Affiliation) ->
 %% that will be added to the affiliation stored in the main
 %% <tt>pubsub_state</tt> table.</p>
 get_entity_subscriptions(Host, Owner) ->
-    {U, D, _} = SubKey = jlib:jid_tolower(Owner),
-    GenKey = jlib:jid_remove_resource(SubKey),
+    {U, D, _} = SubKey = jid:tolower(Owner),
+    GenKey = jid:remove_resource(SubKey),
     States = case SubKey of
 	GenKey ->
 	    mnesia:match_object(#pubsub_state{stateid = {{U, D, '_'}, '_'}, _ = '_'});
@@ -562,12 +574,12 @@ get_node_subscriptions(Nidx) ->
     {result, lists:flatmap(Tr, States)}.
 
 get_subscriptions(Nidx, Owner) ->
-    SubKey = jlib:jid_tolower(Owner),
+    SubKey = jid:tolower(Owner),
     SubState = get_state(Nidx, SubKey),
     {result, SubState#pubsub_state.subscriptions}.
 
 set_subscriptions(Nidx, Owner, Subscription, SubId) ->
-    SubKey = jlib:jid_tolower(Owner),
+    SubKey = jid:tolower(Owner),
     SubState = get_state(Nidx, SubKey),
     case {SubId, SubState#pubsub_state.subscriptions} of
 	{_, []} ->
@@ -601,14 +613,15 @@ replace_subscription(_, [], Acc) -> Acc;
 replace_subscription({Sub, SubId}, [{_, SubId} | T], Acc) ->
     replace_subscription({Sub, SubId}, T, [{Sub, SubId} | Acc]).
 
-new_subscription(Nidx, Owner, Sub, SubState) ->
-    SubId = pubsub_subscription:add_subscription(Owner, Nidx, []),
+new_subscription(_Nidx, _Owner, Sub, SubState) ->
+    %%SubId = pubsub_subscription:add_subscription(Owner, Nidx, []),
+    SubId = pubsub_subscription:make_subid(),
     Subs = SubState#pubsub_state.subscriptions,
     set_state(SubState#pubsub_state{subscriptions = [{Sub, SubId} | Subs]}),
     {Sub, SubId}.
 
 unsub_with_subid(Nidx, SubId, #pubsub_state{stateid = {Entity, _}} = SubState) ->
-    pubsub_subscription:delete_subscription(SubState#pubsub_state.stateid, Nidx, SubId),
+    %%pubsub_subscription:delete_subscription(SubState#pubsub_state.stateid, Nidx, SubId),
     NewSubs = [{S, Sid}
 	    || {S, Sid} <- SubState#pubsub_state.subscriptions,
 		SubId =/= Sid],
@@ -620,7 +633,7 @@ unsub_with_subid(Nidx, SubId, #pubsub_state{stateid = {Entity, _}} = SubState) -
 %% @doc <p>Returns a list of Owner's nodes on Host with pending
 %% subscriptions.</p>
 get_pending_nodes(Host, Owner) ->
-    GenKey = jlib:jid_remove_resource(jlib:jid_tolower(Owner)),
+    GenKey = jid:remove_resource(jid:tolower(Owner)),
     States = mnesia:match_object(#pubsub_state{stateid = {GenKey, '_'},
 		affiliation = owner,
 		_ = '_'}),
@@ -702,8 +715,8 @@ get_items(Nidx, _From, _RSM) ->
     {result, {lists:reverse(lists:keysort(#pubsub_item.modification, Items)), none}}.
 
 get_items(Nidx, JID, AccessModel, PresenceSubscription, RosterGroup, _SubId, RSM) ->
-    SubKey = jlib:jid_tolower(JID),
-    GenKey = jlib:jid_remove_resource(SubKey),
+    SubKey = jid:tolower(JID),
+    GenKey = jid:remove_resource(SubKey),
     GenState = get_state(Nidx, GenKey),
     SubState = get_state(Nidx, SubKey),
     Affiliation = GenState#pubsub_state.affiliation,
@@ -746,8 +759,8 @@ get_item(Nidx, ItemId) ->
     end.
 
 get_item(Nidx, ItemId, JID, AccessModel, PresenceSubscription, RosterGroup, _SubId) ->
-    SubKey = jlib:jid_tolower(JID),
-    GenKey = jlib:jid_remove_resource(SubKey),
+    SubKey = jid:tolower(JID),
+    GenKey = jid:remove_resource(SubKey),
     GenState = get_state(Nidx, GenKey),
     Affiliation = GenState#pubsub_state.affiliation,
     Subscriptions = GenState#pubsub_state.subscriptions,

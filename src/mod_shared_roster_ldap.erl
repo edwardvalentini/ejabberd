@@ -159,8 +159,8 @@ process_item(RosterItem, _Host) ->
     end.
 
 get_subscription_lists({F, T}, User, Server) ->
-    LUser = jlib:nodeprep(User),
-    LServer = jlib:nameprep(Server),
+    LUser = jid:nodeprep(User),
+    LServer = jid:nameprep(Server),
     US = {LUser, LServer},
     DisplayedGroups = get_user_displayed_groups(US),
     SRUsers = lists:usort(lists:flatmap(fun (Group) ->
@@ -172,10 +172,10 @@ get_subscription_lists({F, T}, User, Server) ->
 
 get_jid_info({Subscription, Groups}, User, Server,
 	     JID) ->
-    LUser = jlib:nodeprep(User),
-    LServer = jlib:nameprep(Server),
+    LUser = jid:nodeprep(User),
+    LServer = jid:nameprep(Server),
     US = {LUser, LServer},
-    {U1, S1, _} = jlib:jid_tolower(JID),
+    {U1, S1, _} = jid:tolower(JID),
     US1 = {U1, S1},
     SRUsers = get_user_to_groups_map(US, false),
     case dict:find(US1, SRUsers) of
@@ -197,11 +197,11 @@ out_subscription(User, Server, JID, Type) ->
 
 process_subscription(Direction, User, Server, JID,
 		     _Type, Acc) ->
-    LUser = jlib:nodeprep(User),
-    LServer = jlib:nameprep(Server),
+    LUser = jid:nodeprep(User),
+    LServer = jid:nameprep(Server),
     US = {LUser, LServer},
     {U1, S1, _} =
-	jlib:jid_tolower(jlib:jid_remove_resource(JID)),
+	jid:tolower(jid:remove_resource(JID)),
     US1 = {U1, S1},
     DisplayedGroups = get_user_displayed_groups(US),
     SRUsers = lists:usort(lists:flatmap(fun (Group) ->
@@ -275,16 +275,9 @@ code_change(_OldVsn, State, _Extra) -> {ok, State}.
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
-%% For a given user, map all his shared roster contacts to groups they are
-%% members of. Skip the user himself iff SkipUS is true.
+
 get_user_to_groups_map({_, Server} = US, SkipUS) ->
     DisplayedGroups = get_user_displayed_groups(US),
-%% Pass given FilterParseArgs to eldap_filter:parse, and if successful, run and
-%% return the resulting filter, retrieving given AttributesList. Return the
-%% result entries. On any error silently return an empty list of results.
-%%
-%% Eldap server ID and base DN for the query are both retrieved from the State
-%% record.
     lists:foldl(fun (Group, Dict1) ->
 			GroupName = get_group_name(Server, Group),
 			lists:foldl(fun (Contact, Dict) ->
@@ -424,7 +417,7 @@ search_group_info(State, Group) ->
 										  UID},
 										 L) ->
 										    PUID =
-											jlib:nodeprep(UID),
+											jid:nodeprep(UID),
 										    case
 										      PUID
 											of

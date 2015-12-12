@@ -270,8 +270,7 @@ set_password_internal(User, Server, Password) ->
 					Password).
 
 is_fresh_enough(TimeStampLast, CacheTime) ->
-    {MegaSecs, Secs, _MicroSecs} = now(),
-    Now = MegaSecs * 1000000 + Secs,
+    Now = p1_time_compat:system_time(seconds),
     TimeStampLast + CacheTime > Now.
 
 %% @spec (User, Server) -> online | never | mod_last_required | TimeStamp::integer()
@@ -281,7 +280,6 @@ is_fresh_enough(TimeStampLast, CacheTime) ->
 get_last_access(User, Server) ->
     case ejabberd_sm:get_user_resources(User, Server) of
       [] ->
-%%	  _US = {User, Server},
 	  case get_last_info(User, Server) of
 	    mod_last_required -> mod_last_required;
 	    not_found -> never;
