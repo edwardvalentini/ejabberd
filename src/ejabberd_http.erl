@@ -84,8 +84,9 @@
 	  "">>).
 
 start(SockData, Opts) ->
-    supervisor:start_child(ejabberd_http_sup,
-			   [SockData, Opts]).
+    {ok,
+     proc_lib:spawn(ejabberd_http, init,
+		    [SockData, Opts])}.
 
 start_link(SockData, Opts) ->
     {ok,
@@ -481,7 +482,8 @@ analyze_ip_xff({IPLast, Port}, XFF, Host) ->
 				[jlib:ip_to_list(IPLast)],
     TrustedProxies = ejabberd_config:get_option(
                        {trusted_proxies, Host},
-                       fun(TPs) ->
+                       fun(all) -> all;
+                          (TPs) ->
                                [iolist_to_binary(TP) || TP <- TPs]
                        end, []),
     IPClient = case is_ipchain_trusted(ProxiesIPs,
@@ -879,5 +881,6 @@ transform_listen_option(Opt, Opts) ->
     [Opt|Opts].
 
 opt_type(trusted_proxies) ->
-    fun (TPs) -> [iolist_to_binary(TP) || TP <- TPs] end;
+    fun (all) -> all;
+        (TPs) -> [iolist_to_binary(TP) || TP <- TPs] end;
 opt_type(_) -> [trusted_proxies].

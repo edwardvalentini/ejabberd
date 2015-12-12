@@ -57,7 +57,7 @@
     encode_host/1]).
 
 init(_Host, _ServerHost, _Opts) ->
-    pubsub_subscription_odbc:init(),
+    %%pubsub_subscription_odbc:init(),
     ok.
 
 terminate(_Host, _ServerHost) ->
@@ -73,7 +73,7 @@ create_node_permission(Host, ServerHost, Node, ParentNode, Owner, Access) ->
     node_flat:create_node_permission(Host, ServerHost, Node, ParentNode, Owner, Access).
 
 create_node(Nidx, Owner) ->
-    {_U, _S, _R} = OwnerKey = jlib:jid_tolower(jlib:jid_remove_resource(Owner)),
+    {_U, _S, _R} = OwnerKey = jid:tolower(jid:remove_resource(Owner)),
     State = #pubsub_state{stateid = {OwnerKey, Nidx}, affiliation = owner},
     catch ejabberd_odbc:sql_query_t([<<"insert into pubsub_state(nodeid, jid, affiliation, subscriptions) "
 		"values(">>, state_to_raw(Nidx, State), <<");">>]),
@@ -95,10 +95,10 @@ delete_node(Nodes) ->
     {result, {default, broadcast, Reply}}.
 
 subscribe_node(Nidx, Sender, Subscriber, AccessModel,
-	    SendLast, PresenceSubscription, RosterGroup, Options) ->
-    SubKey = jlib:jid_tolower(Subscriber),
-    GenKey = jlib:jid_remove_resource(SubKey),
-    Authorized = jlib:jid_tolower(jlib:jid_remove_resource(Sender)) == GenKey,
+	    SendLast, PresenceSubscription, RosterGroup, _Options) ->
+    SubKey = jid:tolower(Subscriber),
+    GenKey = jid:remove_resource(SubKey),
+    Authorized = jid:tolower(jid:remove_resource(Sender)) == GenKey,
     {Affiliation, Subscriptions} = select_affiliation_subscriptions(Nidx, GenKey, SubKey),
     Whitelisted = lists:member(Affiliation, [member, publisher, owner]),
     PendingSubscription = lists:any(fun
@@ -131,23 +131,33 @@ subscribe_node(Nidx, Sender, Subscriber, AccessModel,
 	%%        % Requesting entity is anonymous
 	%%        {error, ?ERR_FORBIDDEN};
 	true ->
-	    {result, SubId} = pubsub_subscription_odbc:subscribe_node(Subscriber, Nidx, Options),
-	    NewSub = case AccessModel of
-		authorize -> pending;
-		_ -> subscribed
+	    %%{result, SubId} = pubsub_subscription_odbc:subscribe_node(Subscriber, Nidx, Options),
+	    {NewSub, SubId} = case Subscriptions of
+		[{subscribed, Id}|_] ->
+		    {subscribed, Id};
+		[] ->
+		    Id = pubsub_subscription_odbc:make_subid(),
+		    Sub = case AccessModel of
+			authorize -> pending;
+			_ -> subscribed
+		    end,
+		    update_subscription(Nidx, SubKey, [{Sub, Id} | Subscriptions]),
+		    {Sub, Id}
 	    end,
-	    update_subscription(Nidx, SubKey, [{NewSub, SubId} | Subscriptions]),
 	    case {NewSub, SendLast} of
-		{subscribed, never} -> {result, {default, subscribed, SubId}};
-		{subscribed, _} -> {result, {default, subscribed, SubId, send_last}};
-		{_, _} -> {result, {default, pending, SubId}}
+		{subscribed, never} ->
+		    {result, {default, subscribed, SubId}};
+		{subscribed, _} ->
+		    {result, {default, subscribed, SubId, send_last}};
+		{_, _} ->
+		    {result, {default, pending, SubId}}
 	    end
     end.
 
 unsubscribe_node(Nidx, Sender, Subscriber, SubId) ->
-    SubKey = jlib:jid_tolower(Subscriber),
-    GenKey = jlib:jid_remove_resource(SubKey),
-    Authorized = jlib:jid_tolower(jlib:jid_remove_resource(Sender)) == GenKey,
+    SubKey = jid:tolower(Subscriber),
+    GenKey = jid:remove_resource(SubKey),
+    Authorized = jid:tolower(jid:remove_resource(Sender)) == GenKey,
     {Affiliation, Subscriptions} = select_affiliation_subscriptions(Nidx, SubKey),
     SubIdExists = case SubId of
 	<<>> -> false;
@@ -200,15 +210,15 @@ unsubscribe_node(Nidx, Sender, Subscriber, SubId) ->
 
 delete_subscription(SubKey, Nidx, {Subscription, SubId}, Affiliation, Subscriptions) ->
     NewSubs = Subscriptions -- [{Subscription, SubId}],
-    pubsub_subscription_odbc:unsubscribe_node(SubKey, Nidx, SubId),
+    %%pubsub_subscription_odbc:unsubscribe_node(SubKey, Nidx, SubId),
     case {Affiliation, NewSubs} of
 	{none, []} -> del_state(Nidx, SubKey);
 	_ -> update_subscription(Nidx, SubKey, NewSubs)
     end.
 
 publish_item(Nidx, Publisher, PublishModel, MaxItems, ItemId, Payload) ->
-    SubKey = jlib:jid_tolower(Publisher),
-    GenKey = jlib:jid_remove_resource(SubKey),
+    SubKey = jid:tolower(Publisher),
+    GenKey = jid:remove_resource(SubKey),
     {Affiliation, Subscriptions} = select_affiliation_subscriptions(Nidx, GenKey, SubKey),
     Subscribed = case PublishModel of
 	subscribers -> node_flat:is_subscribed(Subscriptions);
@@ -223,9 +233,9 @@ publish_item(Nidx, Publisher, PublishModel, MaxItems, ItemId, Payload) ->
 	    {error, ?ERR_FORBIDDEN};
 	true ->
 	    if MaxItems > 0 ->
-		    PubId = {now(), SubKey},
+		    PubId = {p1_time_compat:timestamp(), SubKey},
 		    set_item(#pubsub_item{itemid = {ItemId, Nidx},
-			    creation = {now(), GenKey},
+			    creation = {p1_time_compat:timestamp(), GenKey},
 			    modification = PubId,
 			    payload = Payload}),
 		    Items = [ItemId | itemids(Nidx, GenKey) -- [ItemId]],
@@ -245,8 +255,8 @@ remove_extra_items(Nidx, MaxItems, ItemIds) ->
     {result, {NewItems, OldItems}}.
 
 delete_item(Nidx, Publisher, PublishModel, ItemId) ->
-    SubKey = jlib:jid_tolower(Publisher),
-    GenKey = jlib:jid_remove_resource(SubKey),
+    SubKey = jid:tolower(Publisher),
+    GenKey = jid:remove_resource(SubKey),
     {result, Affiliation} = get_affiliation(Nidx, GenKey),
     Allowed = Affiliation == publisher orelse
 	Affiliation == owner orelse
@@ -265,8 +275,8 @@ delete_item(Nidx, Publisher, PublishModel, ItemId) ->
     end.
 
 purge_node(Nidx, Owner) ->
-    SubKey = jlib:jid_tolower(Owner),
-    GenKey = jlib:jid_remove_resource(SubKey),
+    SubKey = jid:tolower(Owner),
+    GenKey = jid:remove_resource(SubKey),
     GenState = get_state(Nidx, GenKey),
     case GenState of
 	#pubsub_state{affiliation = owner} ->
@@ -282,8 +292,8 @@ purge_node(Nidx, Owner) ->
     end.
 
 get_entity_affiliations(Host, Owner) ->
-    SubKey = jlib:jid_tolower(Owner),
-    GenKey = jlib:jid_remove_resource(SubKey),
+    SubKey = jid:tolower(Owner),
+    GenKey = jid:remove_resource(SubKey),
     H = encode_host(Host),
     J = encode_jid(GenKey),
     Reply = case catch
@@ -312,8 +322,8 @@ get_node_affiliations(Nidx) ->
     {result, Reply}.
 
 get_affiliation(Nidx, Owner) ->
-    SubKey = jlib:jid_tolower(Owner),
-    GenKey = jlib:jid_remove_resource(SubKey),
+    SubKey = jid:tolower(Owner),
+    GenKey = jid:remove_resource(SubKey),
     J = encode_jid(GenKey),
     Reply = case catch
 	ejabberd_odbc:sql_query_t([<<"select affiliation from pubsub_state "
@@ -327,8 +337,8 @@ get_affiliation(Nidx, Owner) ->
     {result, Reply}.
 
 set_affiliation(Nidx, Owner, Affiliation) ->
-    SubKey = jlib:jid_tolower(Owner),
-    GenKey = jlib:jid_remove_resource(SubKey),
+    SubKey = jid:tolower(Owner),
+    GenKey = jid:remove_resource(SubKey),
     {_, Subscriptions} = select_affiliation_subscriptions(Nidx, GenKey),
     case {Affiliation, Subscriptions} of
 	{none, []} -> del_state(Nidx, GenKey);
@@ -336,8 +346,8 @@ set_affiliation(Nidx, Owner, Affiliation) ->
     end.
 
 get_entity_subscriptions(Host, Owner) ->
-    SubKey = jlib:jid_tolower(Owner),
-    GenKey = jlib:jid_remove_resource(SubKey),
+    SubKey = jid:tolower(Owner),
+    GenKey = jid:remove_resource(SubKey),
     H = encode_host(Host),
     SJ = encode_jid(SubKey),
     GJ = encode_jid(GenKey),
@@ -385,8 +395,8 @@ get_entity_subscriptions(Host, Owner) ->
     }
     ).
 get_entity_subscriptions_for_send_last(Host, Owner) ->
-    SubKey = jlib:jid_tolower(Owner),
-    GenKey = jlib:jid_remove_resource(SubKey),
+    SubKey = jid:tolower(Owner),
+    GenKey = jid:remove_resource(SubKey),
     H = encode_host(Host),
     SJ = encode_jid(SubKey),
     GJ = encode_jid(GenKey),
@@ -449,7 +459,7 @@ get_node_subscriptions(Nidx) ->
     {result, Reply}.
 
 get_subscriptions(Nidx, Owner) ->
-    SubKey = jlib:jid_tolower(Owner),
+    SubKey = jid:tolower(Owner),
     J = encode_jid(SubKey),
     Reply = case catch
 	ejabberd_odbc:sql_query_t([<<"select subscriptions from pubsub_state where "
@@ -463,7 +473,7 @@ get_subscriptions(Nidx, Owner) ->
     {result, Reply}.
 
 set_subscriptions(Nidx, Owner, Subscription, SubId) ->
-    SubKey = jlib:jid_tolower(Owner),
+    SubKey = jid:tolower(Owner),
     SubState = get_state_without_itemids(Nidx, SubKey),
     case {SubId, SubState#pubsub_state.subscriptions} of
 	{_, []} ->
@@ -497,14 +507,15 @@ replace_subscription(_, [], Acc) -> Acc;
 replace_subscription({Sub, SubId}, [{_, SubId} | T], Acc) ->
     replace_subscription({Sub, SubId}, T, [{Sub, SubId} | Acc]).
 
-new_subscription(Nidx, Owner, Subscription, SubState) ->
-    {result, SubId} = pubsub_subscription_odbc:subscribe_node(Owner, Nidx, []),
+new_subscription(_Nidx, _Owner, Subscription, SubState) ->
+    %%{result, SubId} = pubsub_subscription_odbc:subscribe_node(Owner, Nidx, []),
+    SubId = pubsub_subscription_odbc:make_subid(),
     Subscriptions = [{Subscription, SubId} | SubState#pubsub_state.subscriptions],
     set_state(SubState#pubsub_state{subscriptions = Subscriptions}),
     {Subscription, SubId}.
 
 unsub_with_subid(Nidx, SubId, SubState) ->
-    pubsub_subscription_odbc:unsubscribe_node(SubState#pubsub_state.stateid, Nidx, SubId),
+    %%pubsub_subscription_odbc:unsubscribe_node(SubState#pubsub_state.stateid, Nidx, SubId),
     NewSubs = [{S, Sid}
 	    || {S, Sid} <- SubState#pubsub_state.subscriptions,
 		SubId =/= Sid],
@@ -514,7 +525,7 @@ unsub_with_subid(Nidx, SubId, SubState) ->
     end.
 
 get_pending_nodes(Host, Owner) ->
-    GenKey = jlib:jid_remove_resource(jlib:jid_tolower(Owner)),
+    GenKey = jid:remove_resource(jid:tolower(Owner)),
     States = mnesia:match_object(#pubsub_state{stateid = {GenKey, '_'},
 		affiliation = owner, _ = '_'}),
     Nidxxs = [Nidx || #pubsub_state{stateid = {_, Nidx}} <- States],
@@ -719,8 +730,8 @@ get_items(Nidx, _From,
     end.
 
 get_items(Nidx, JID, AccessModel, PresenceSubscription, RosterGroup, _SubId, RSM) ->
-    SubKey = jlib:jid_tolower(JID),
-    GenKey = jlib:jid_remove_resource(SubKey),
+    SubKey = jid:tolower(JID),
+    GenKey = jid:remove_resource(SubKey),
     {Affiliation, Subscriptions} = select_affiliation_subscriptions(Nidx, GenKey, SubKey),
     Whitelisted = node_flat:can_fetch_item(Affiliation, Subscriptions),
     if %%SubId == "", ?? ->
@@ -777,8 +788,8 @@ get_item(Nidx, ItemId) ->
     end.
 
 get_item(Nidx, ItemId, JID, AccessModel, PresenceSubscription, RosterGroup, _SubId) ->
-    SubKey = jlib:jid_tolower(JID),
-    GenKey = jlib:jid_remove_resource(SubKey),
+    SubKey = jid:tolower(JID),
+    GenKey = jid:remove_resource(SubKey),
     {Affiliation, Subscriptions} = select_affiliation_subscriptions(Nidx, GenKey, SubKey),
     Whitelisted = node_flat:can_fetch_item(Affiliation, Subscriptions),
     if %%SubId == "", ?? ->
@@ -939,7 +950,7 @@ update_subscription(Nidx, JID, Subscription) ->
     -> ljid()
     ).
 decode_jid(SJID) ->
-    jlib:jid_tolower(jlib:string_to_jid(SJID)).
+    jid:tolower(jid:from_string(SJID)).
 
 -spec(decode_affiliation/1 ::
     (   Arg :: binary())
@@ -979,7 +990,7 @@ decode_subscriptions(Subscriptions) ->
     -> binary()
     ).
 encode_jid(JID) ->
-    ejabberd_odbc:escape(jlib:jid_to_string(JID)).
+    ejabberd_odbc:escape(jid:to_string(JID)).
 
 -spec(encode_host/1 ::
     (   Host :: host())
