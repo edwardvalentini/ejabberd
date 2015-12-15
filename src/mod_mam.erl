@@ -34,8 +34,8 @@
 -export([start/2, stop/1]).
 
 -export([user_send_packet/4, user_receive_packet/5,
-	 process_iq_v0_2/3, process_iq_v0_3/3, remove_user/2,
-	 remove_user/3, mod_opt_type/1, muc_process_iq/4,
+	 process_iq_v0_2/3, process_iq_v0_3/3, disco_sm_features/5,
+	 remove_user/2, remove_user/3, mod_opt_type/1, muc_process_iq/4,
 	 muc_filter_message/5]).
 
 -include_lib("stdlib/include/ms_transform.hrl").
@@ -88,6 +88,8 @@ start(Host, Opts) ->
 		       muc_filter_message, 50),
     ejabberd_hooks:add(muc_process_iq, Host, ?MODULE,
 		       muc_process_iq, 50),
+    ejabberd_hooks:add(disco_sm_features, Host, ?MODULE,
+		       disco_sm_features, 50),
     ejabberd_hooks:add(remove_user, Host, ?MODULE,
 		       remove_user, 50),
     ejabberd_hooks:add(anonymous_purge_hook, Host, ?MODULE,
@@ -130,6 +132,8 @@ stop(Host) ->
     gen_iq_handler:remove_iq_handler(ejabberd_sm, Host, ?NS_MAM_0),
     gen_iq_handler:remove_iq_handler(ejabberd_local, Host, ?NS_MAM_1),
     gen_iq_handler:remove_iq_handler(ejabberd_sm, Host, ?NS_MAM_1),
+    ejabberd_hooks:delete(disco_sm_features, Host, ?MODULE,
+			  disco_sm_features, 50),
     ejabberd_hooks:delete(remove_user, Host, ?MODULE,
 			  remove_user, 50),
     ejabberd_hooks:delete(anonymous_purge_hook, Host,
@@ -200,12 +204,12 @@ user_send_packet(Pkt, C2SState, JID, Peer) ->
 muc_filter_message(Pkt, #state{config = Config} = MUCState,
 		   RoomJID, From, FromNick) ->
     if Config#config.mam ->
-	    By = jid:to_string(RoomJID),
-	    NewPkt = strip_my_archived_tag(Pkt, By),
+	    LServer = RoomJID#jid.lserver,
+	    NewPkt = strip_my_archived_tag(Pkt, LServer),
 	    case store_muc(MUCState, NewPkt, RoomJID, From, FromNick) of
 		{ok, ID} ->
 		    StanzaID = #xmlel{name = <<"stanza-id">>,
-				      attrs = [{<<"by">>, By},
+				      attrs = [{<<"by">>, LServer},
                                                {<<"xmlns">>, ?NS_SID_0},
                                                {<<"id">>, ID}]},
                     NewEls = [StanzaID|NewPkt#xmlel.children],
@@ -275,6 +279,15 @@ get_xdata_fields(SubEl) ->
 	{false, false} ->
 	    []
     end.
+
+disco_sm_features(empty, From, To, Node, Lang) ->
+    disco_sm_features({result, []}, From, To, Node, Lang);
+disco_sm_features({result, OtherFeatures},
+		  #jid{luser = U, lserver = S},
+		  #jid{luser = U, lserver = S}, <<>>, _Lang) ->
+    {result, [?NS_MAM_TMP, ?NS_MAM_0, ?NS_MAM_1 | OtherFeatures]};
+disco_sm_features(Acc, _From, _To, _Node, _Lang) ->
+    Acc.
 
 %%%===================================================================
 %%% Internal functions
@@ -781,8 +794,7 @@ maybe_update_from_to(#xmlel{children = Els} = Pkt, JidRequestor,
 		    []
 	    end,
     Pkt1 = Pkt#xmlel{children = Items ++ Els},
-    Pkt2 = jlib:replace_from(jid:replace_resource(JidRequestor, Nick), Pkt1),
-    jlib:remove_attr(<<"to">>, Pkt2).
+    Pkt2 = jlib:replace_from(jid:replace_resource(JidRequestor, Nick), Pkt1).
 
 is_bare_copy(#jid{luser = U, lserver = S, lresource = R}, To) ->
     PrioRes = ejabberd_sm:get_user_present_resources(U, S),
